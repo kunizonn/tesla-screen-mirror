@@ -9,62 +9,61 @@ PCの画面を Tesla(Model Y L・日本仕様で想定)の車載ブラウザに�
 
 > 現在の段階: **WebSocket中継モードのみ**。WebRTCモード(同一LANで低遅延)は次の段階で追加予定です。
 
-## 必要なもの
+## かんたん起動(PC側)
 
-- Node.js 18 以上
-- PCのブラウザ: **Chrome または Edge を推奨**(Firefox / Safari でも動きますが、送信の効率が落ちます)
-- 外部ネットワーク経由で使う場合: [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+インストール作業は自動で行われます。**最初にファイルをダブルクリックするだけ**です。
 
-## 起動手順
+### 1. このプログラムをPCにダウンロードする
 
-### 1. インストール
+1. GitHub のこのリポジトリのページで、ブランチを `claude/websocket-relay-mode` に切り替える
+2. 緑色の **Code** ボタン → **Download ZIP** を押す
+3. ダウンロードしたZIPを右クリックして「すべて展開」(Macはダブルクリック)で、好きな場所に展開する
+
+### 2. ダブルクリックで起動する
+
+| PC | ダブルクリックするファイル |
+| --- | --- |
+| Windows | `start-windows.bat` |
+| Mac | `start-mac.command` |
+
+黒い画面(ターミナル)が開き、次のことを自動で行います。
+
+1. **Node.js** が入っていなければインストールする
+   - Windows: 途中で「変更を加えることを許可しますか?」と出たら「はい」。終わったら **もう一度ダブルクリック** してください
+   - Mac: Homebrew がなければ Node.js のダウンロードページが開きます。「LTS」と書かれた方をインストールしてから、もう一度ダブルクリックしてください
+2. 必要な部品をダウンロードする(`npm install`。初回のみ)
+3. **cloudflared**(インターネットに公開するための道具)をこのフォルダの `.bin` にダウンロードする(初回のみ・約40MB)
+4. サーバーを起動し、Tesla で開くURLを表示する
+5. **送信ページがブラウザで自動的に開く**
+
+#### 起動できないとき
+
+- **Windows で「WindowsによってPCが保護されました」と出た**: 「詳細情報」→「実行」を押す
+- **Mac で「開発元を検証できない」と出た**: いったん閉じて、「システム設定」→「プライバシーとセキュリティ」の下の方にある「このまま開く」を押す(古いmacOSでは、ファイルを右クリック →「開く」)
+
+### 3. PCで画面共有を始める
+
+自動で開いた送信ページ(`http://localhost:3000/send`)で、
+
+1. 「開くURL」と「接続コード(4桁)」が表示されていることを確認する
+2. 「画面共有を開始」を押し、映したい画面(画面全体またはウィンドウ)を選ぶ
+
+ブラウザは **Chrome または Edge を推奨** します。
+共有中は、黒い画面(ターミナル)と送信ページのタブを閉じないでください。別のタブや別のウィンドウに切り替えても送信が続くようにしていますが、
+もし視聴側のfpsが極端に落ちる場合は、送信ページのウィンドウを最小化せずに残しておいてください。
+
+終了するときは、黒い画面(ターミナル)を閉じます。公開URLは **起動するたびに変わります**。
+
+### (参考)コマンドで起動する場合
+
+ターミナルに慣れている場合は、Node.js 18 以上を入れたうえで次のコマンドでも同じことができます。
 
 ```sh
 npm install
-```
-
-### 2. cloudflared のインストール(初回のみ)
-
-| OS | コマンド |
-| --- | --- |
-| Windows | `winget install --id Cloudflare.cloudflared`(インストール後にターミナルを開き直す) |
-| macOS | `brew install cloudflared` |
-| Linux | [公式のダウンロードページ](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) を参照 |
-
-未インストールのまま `npm run tunnel` を実行すると、OSに合わせたインストール方法が表示されます。
-Cloudflare のアカウントは不要です。
-
-### 3. サーバーと公開URLの起動
-
-```sh
 npm run tunnel
 ```
 
-10秒ほどで次のような表示が出ます。
-
-```
-==================================================
-  Tesla のブラウザで開くURL:
-    https://xxxx-xxxx-xxxx-xxxx.trycloudflare.com
-
-  このPCで開く送信ページ:
-    http://localhost:3000/send
-
-  接続コードは送信ページに表示されます。
-==================================================
-```
-
-公開URLは **起動するたびに変わります**。終了は `Ctrl+C` です。
-
-### 4. PCで送信を開始
-
-1. PCのブラウザで `http://localhost:3000/send` を開く
-2. 画面上部に「開くURL」と「接続コード」が表示される
-3. 「画面共有を開始」を押し、共有する画面(画面全体またはウィンドウ)を選ぶ
-
-送信ページは、サーバーを起動したPC上で `localhost` から開いてください(他の端末からは送信できない設定にしています)。
-共有中は送信ページのタブを閉じないでください。別のタブや別のウィンドウに切り替えても送信が続くようにしていますが、
-もし視聴側のfpsが極端に落ちる場合は、送信ページのウィンドウを最小化せずに残しておいてください。
+cloudflared がすでにインストールされていればそれを使い、なければ自動でダウンロードします。
 
 ## Tesla側での開き方
 
@@ -148,6 +147,7 @@ Teslaのブラウザで `http://<PCのIPアドレス>:3000/` を開きます。P
 | `ALLOW_REMOTE_SENDER` | なし | `1` にすると、localhost 以外からの送信を許可します |
 | `CLOUDFLARED` | `cloudflared` | cloudflared の実行ファイルのパス |
 | `DEBUG_TUNNEL` | なし | `1` にすると cloudflared のログをそのまま表示します |
+| `NO_OPEN` | なし | `1` にすると、起動時に送信ページを自動で開きません |
 
 Windows の PowerShell では `$env:CODE_LENGTH=6; npm run tunnel` のように指定します。
 
@@ -155,7 +155,7 @@ Windows の PowerShell では `$env:CODE_LENGTH=6; npm run tunnel` のように�
 
 | 症状 | 対処 |
 | --- | --- |
-| 「cloudflared が見つかりませんでした」 | 上の手順でインストールし、ターミナルを開き直す |
+| 「cloudflared の自動ダウンロードに失敗しました」 | インターネット接続を確認してもう一度起動する。それでもだめなら表示された手順で手動インストールする |
 | 「cloudflared が終了しました」 | ネットワークの制限(社内ネットワークなど)で Cloudflare に接続できない可能性があります。`DEBUG_TUNNEL=1` で詳細を確認してください |
 | 送信ページに「送信できません」 | `http://localhost:3000/send` をサーバーと同じPCで開いてください |
 | 画面共有のボタンを押しても何も起きない | Chrome / Edge で、`http://localhost` から開いているか確認してください |
@@ -166,7 +166,9 @@ Windows の PowerShell では `$env:CODE_LENGTH=6; npm run tunnel` のように�
 
 ```
 server.js           HTTPサーバー + WebSocket(ルーム管理・フレーム中継・時刻同期)
-scripts/tunnel.js   サーバー起動 + cloudflared quick tunnel の起動とURL表示
+scripts/tunnel.js   サーバー起動 + cloudflared の自動ダウンロード・quick tunnel の起動とURL表示
+start-windows.bat   Windows用のダブルクリック起動ファイル
+start-mac.command   Mac用のダブルクリック起動ファイル
 public/
   viewer.html/.js   視聴ページ(Tesla用、/ で配信)
   sender.html/.js   送信ページ(PC用、/send で配信)
