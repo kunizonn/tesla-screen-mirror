@@ -93,6 +93,20 @@ Teslaのブラウザはアドレスバーなどが常に表示されるため、
 https://www.youtube.com/redirect?q=https://xxxx-xxxx-xxxx-xxxx.trycloudflare.com
 ```
 
+## Teslaを「2枚目のモニター(画面拡張)」として使う
+
+ブラウザの機能だけでは新しい画面を作れないため、PC側に **仮想ディスプレイ** を追加してから、その画面を共有します。
+
+1. 仮想ディスプレイを追加する
+   - **Mac**: [BetterDisplay](https://github.com/waydabber/BetterDisplay) をインストールし、メニューバーのアイコンから「Create New Virtual Screen」で仮想スクリーンを作る(16:9 の 1920×1080 などがおすすめ)
+   - **Windows**: [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver) などの仮想ディスプレイドライバを入れる
+   - ソフトを入れたくない場合は、HDMIの「ダミープラグ」(千円前後)をPCに挿すと、モニターがつながっているものとして扱われます
+2. PCのディスプレイ設定で「拡張」になっていることを確認する(ミラーリングではなく)
+3. 送信ページで「画面共有を開始」を押し、追加された方の画面を選ぶ
+
+あとは、ウィンドウをその画面へドラッグすると Tesla に映ります。
+マウスは仮想ディスプレイへ移動できますが、Teslaの画面をタッチしてPCを操作することはできません。
+
 ## 画質の調整
 
 送信ページで、共有中でもその場で変えられます。設定はブラウザに保存されます。

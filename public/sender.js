@@ -124,9 +124,14 @@ const socket = new MirrorSocket({
 });
 
 function showPublicUrl(url) {
+  // YouTube のリダイレクト経由で開くと、Teslaのブラウザが全画面表示になる(オーナーの間で知られている方法・動作保証なし)
+  const full = url ? 'https://www.youtube.com/redirect?q=' + url : '';
+  $('fullUrl').textContent = full;
+  $('fullUrlLabel').hidden = $('fullUrlRow').hidden = !full;
   if (url) {
     $('publicUrl').textContent = url;
-    $('urlHint').textContent = 'Teslaのブラウザでこのアドレスを開き、接続コードを入力してください。';
+    $('urlHint').textContent =
+      'Teslaのブラウザでこのアドレスを開き、接続コードを入力してください。画面の半分にしか表示されない場合は「全画面で開く」のアドレスを試してください。';
   } else {
     $('publicUrl').textContent = '(公開URLなし)';
     $('urlHint').textContent = '外部から接続するには npm run tunnel で起動してください。同じWi-Fi内なら http://<このPCのIPアドレス>:' + (location.port || 80) + '/ でも開けます。';
