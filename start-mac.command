@@ -24,3 +24,6 @@ echo
 echo "終了するときは、このウィンドウで Control + C を押すか、ウィンドウを閉じてください。"
 echo
 node scripts/tunnel.js
+
+echo
+read -r -p "終了しました。Enter キーでこの画面を閉じます"

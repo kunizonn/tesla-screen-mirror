@@ -144,7 +144,7 @@ async function main() {
   try {
     await start(PORT);
   } catch (err) {
-    console.error(err.code === 'EADDRINUSE' ? `ポート ${PORT} は使用中です。すでに起動していないか確認してください。` : err);
+    console.error(err.code === 'EADDRINUSE' ? `ポート ${PORT} は使用中です。前に起動した黒い画面(ターミナル)が残っていませんか?それを閉じてから、もう一度起動してください。` : err);
     process.exit(1);
   }
   console.log(`サーバーを起動しました: http://localhost:${PORT}`);
