@@ -1,0 +1,22 @@
+{
+  "name": "tesla-screen-mirror",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PCの画面をTeslaの車載ブラウザに映す試作Webアプリ",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "tunnel": "node scripts/tunnel.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kunizonn/tesla-screen-mirror.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.22.0"
+  }
+}
