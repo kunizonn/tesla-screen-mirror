@@ -52,6 +52,8 @@
       <dd><span id="publicUrl" class="url">取得中…</span></dd>
       <dt id="fullUrlLabel" hidden>全画面で開く</dt>
       <dd id="fullUrlRow" hidden><span id="fullUrl" class="url"></span></dd>
+      <dt id="lanUrlLabel" hidden>同じWi-Fi・<br>テザリングなら</dt>
+      <dd id="lanUrlRow" hidden><span id="lanUrl" class="url"></span></dd>
       <dt>接続コード</dt>
       <dd><span id="code" class="code">----</span></dd>
     </dl>
@@ -67,6 +69,14 @@
 
   <section class="panel">
     <h2>画質設定(共有中でも変更できます)</h2>
+    <div class="row">
+      <label for="mode">転送方式</label>
+      <select id="mode">
+        <option value="ws">WebSocket中継(どこでもつながる・遅め)</option>
+        <option value="webrtc">WebRTC(低遅延・おすすめ)</option>
+      </select>
+      <output id="modeOut"></output>
+    </div>
     <div class="row">
       <label for="resolution">最大解像度</label>
       <select id="resolution">
@@ -85,7 +95,7 @@
       <output id="fpsOut"></output>
     </div>
     <div class="row">
-      <label for="quality">JPEG画質</label>
+      <label for="quality" id="qualityLabel">JPEG画質</label>
       <input id="quality" type="range" min="0.3" max="0.95" step="0.05">
       <output id="qualityOut"></output>
     </div>
@@ -98,9 +108,10 @@
       <div class="stat"><span>視聴者</span><b id="sViewers">0</b></div>
       <div class="stat"><span>送信fps</span><b id="sFps">0</b></div>
       <div class="stat"><span>帯域</span><b id="sRate">0 Mbps</b></div>
-      <div class="stat"><span>1フレーム</span><b id="sSize">-</b></div>
+      <div class="stat"><span id="sSizeLabel">1フレーム</span><b id="sSize">-</b></div>
       <div class="stat"><span>送信解像度</span><b id="sRes">-</b></div>
       <div class="stat"><span>視聴側の遅延</span><b id="sLatency">-</b></div>
+      <div class="stat"><span>WebRTC接続</span><b id="sRtc">-</b></div>
     </div>
   </section>
 

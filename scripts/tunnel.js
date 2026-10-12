@@ -6,7 +6,7 @@
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { start, setPublicUrl, PORT } = require('../server');
+const { start, setPublicUrl, lanUrls, PORT } = require('../server');
 
 const URL_RE = /https:\/\/[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com/; // api.trycloudflare.com などは除外
 const RELEASE_BASE = 'https://github.com/cloudflare/cloudflared/releases/latest/download/';
@@ -129,6 +129,9 @@ function printBanner(url) {
     '  Tesla のブラウザで開くURL:',
     `    ${url}`,
     '',
+    ...(lanUrls(PORT).length
+      ? ['  同じWi-Fi・テザリングにつないでいる場合(こちらの方が速い):', ...lanUrls(PORT).map((u) => `    ${u}`), '']
+      : []),
     '  このPCで開く送信ページ:',
     `    http://localhost:${PORT}/send`,
     '',

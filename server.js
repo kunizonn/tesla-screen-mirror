@@ -8,6 +8,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
 const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -22,6 +23,17 @@ const VIEWER_BUFFER_LIMIT = 512 * 1024; // 視聴側の送信待ちがこれを�
 const FRAME_HEADER_BYTES = 16;
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
+// 同じWi-Fi・テザリング内から直接開くためのアドレス(http://192.168.x.x:3000/ など)
+function lanUrls(port) {
+  const urls = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const a of list || []) {
+      if (a.family === 'IPv4' && !a.internal && !a.address.startsWith('169.254.')) urls.push(`http://${a.address}:${port}/`);
+    }
+  }
+  return urls;
+}
+
 const ROUTES = { '/': 'viewer.html', '/view': 'viewer.html', '/send': 'sender.html' };
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -62,7 +74,7 @@ function serveStatic(req, res) {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/api/info') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ publicUrl, codeLength: CODE_LENGTH, port: PORT }));
+    res.end(JSON.stringify({ publicUrl, lanUrls: lanUrls(PORT), codeLength: CODE_LENGTH, port: PORT }));
     return;
   }
   const rel = ROUTES[url.pathname] || url.pathname.replace(/^\/+/, '');
@@ -96,6 +108,7 @@ class Room {
     this.viewers = new Set();
     this.lastFrame = null;
     this.expireTimer = null;
+    this.mode = 'ws'; // 'ws' = WebSocket中継, 'webrtc' = P2P
   }
 
   setSender(ws) {
@@ -104,6 +117,7 @@ class Room {
     clearTimeout(this.expireTimer);
     this.expireTimer = null;
     this.broadcast({ type: 'sender', online: true });
+    this.broadcast({ type: 'mode', mode: this.mode });
     this.notifyViewerCount();
   }
 
@@ -124,8 +138,22 @@ class Room {
     if (this.viewers.delete(ws)) this.notifyViewerCount();
   }
 
+  // 送信側には、視聴者のIDと「JPEGフレームが必要な視聴者の数」を伝える
   notifyViewerCount() {
-    send(this.sender, { type: 'viewers', count: this.viewers.size });
+    const ids = [...this.viewers].map((v) => v.id);
+    const relayCount = [...this.viewers].filter((v) => v.wantsFrames).length;
+    send(this.sender, { type: 'viewers', count: ids.length, ids, relayCount });
+  }
+
+  setMode(mode) {
+    if (mode !== 'ws' && mode !== 'webrtc') return;
+    this.mode = mode;
+    this.broadcast({ type: 'mode', mode });
+  }
+
+  viewerById(id) {
+    for (const v of this.viewers) if (v.id === id) return v;
+    return null;
   }
 
   broadcast(msg) {
@@ -135,7 +163,7 @@ class Room {
   relayFrame(buf) {
     this.lastFrame = buf;
     for (const v of this.viewers) {
-      if (v.readyState !== v.OPEN) continue;
+      if (v.readyState !== v.OPEN || !v.wantsFrames) continue;
       // 回線が詰まっている視聴者にはフレームを捨てて遅延の蓄積を防ぐ
       if (v.bufferedAmount > VIEWER_BUFFER_LIMIT) continue;
       v.send(buf, { binary: true });
@@ -247,10 +275,12 @@ function handleHello(ws, msg) {
     failures.delete(ws.ip);
     ws.role = 'viewer';
     ws.room = room;
+    ws.id = crypto.randomBytes(6).toString('hex');
+    ws.wantsFrames = true;
     room.addViewer(ws);
     log(`視聴側が接続しました。コード: ${room.code} 視聴者数: ${room.viewers.size}`);
-    send(ws, { type: 'joined', senderOnline: !!room.sender });
-    if (room.lastFrame) ws.send(room.lastFrame, { binary: true });
+    send(ws, { type: 'joined', senderOnline: !!room.sender, mode: room.mode });
+    if (room.lastFrame && room.mode === 'ws') ws.send(room.lastFrame, { binary: true });
   }
 }
 
@@ -277,6 +307,24 @@ function handleMessage(ws, data, isBinary) {
     case 'ack':
       // 視聴側の描画完了を送信側に伝える(送信側の流量制御に使う)
       if (ws.role === 'viewer') send(ws.room.sender, { type: 'ack', id: msg.id });
+      break;
+    case 'mode':
+      if (ws.role === 'sender') ws.room.setMode(msg.mode);
+      break;
+    case 'frames':
+      // WebRTCで表示できている視聴者はJPEGフレームを受け取らない
+      if (ws.role === 'viewer') {
+        ws.wantsFrames = !!msg.on;
+        ws.room.notifyViewerCount();
+      }
+      break;
+    case 'signal':
+      // WebRTCのシグナリング(SDP・ICE候補)を中継する
+      if (ws.role === 'sender' && typeof msg.to === 'string') {
+        send(ws.room.viewerById(msg.to), { type: 'signal', data: msg.data });
+      } else if (ws.role === 'viewer') {
+        send(ws.room.sender, { type: 'signal', from: ws.id, data: msg.data });
+      }
       break;
     case 'stats':
       if (ws.role === 'viewer') send(ws.room.sender, { type: 'viewer-stats', latency: msg.latency, fps: msg.fps });
@@ -334,7 +382,7 @@ function setPublicUrl(url) {
   for (const room of rooms.values()) send(room.sender, { type: 'public-url', publicUrl });
 }
 
-module.exports = { start, setPublicUrl, PORT };
+module.exports = { start, setPublicUrl, lanUrls, PORT };
 
 if (require.main === module) {
   start()

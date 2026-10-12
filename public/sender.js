@@ -1,10 +1,12 @@
 'use strict';
 
-// 送信ページ: getDisplayMedia でキャプチャした画面を JPEG にしてサーバーへ送る
+// 送信ページ: getDisplayMedia でキャプチャした画面を送る。
+// WebSocket中継モードはJPEGにしてサーバー経由で、WebRTCモードは動画としてP2Pで送る
 
 const $ = (id) => document.getElementById(id);
 
-const DEFAULTS = { resolution: '1280x720', fps: 20, quality: 0.6 };
+const DEFAULTS = { resolution: '1280x720', fps: 20, quality: 0.6, mode: 'ws' };
+const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 // 視聴側の描画完了を待たずに送ってよいフレーム数(約0.4秒分)。
 // 往復の遅いトンネル経由でもfpsを保ちつつ、回線が詰まったときの遅延の蓄積を抑える
 const maxInFlight = () => Math.max(2, Math.ceil(settings.fps * 0.4));
@@ -17,7 +19,12 @@ const room = JSON.parse(sessionStorage.getItem('mirror-room') || 'null') || {};
 
 let stream = null;
 let frameSource = null;
-let viewers = 0;
+let viewers = 0; // 視聴者の総数
+let viewerIds = [];
+let relayViewers = 0; // JPEGフレームを受け取る視聴者の数
+let lanIps = [];
+/** @type {Map<string, RTCPeerConnection>} 視聴者ID → WebRTC接続 */
+const peers = new Map();
 let frameId = 0;
 let lastAckId = 0;
 let lastAckTime = 0;
@@ -50,27 +57,42 @@ function bindSettings() {
   $('resolution').value = settings.resolution;
   $('fps').value = settings.fps;
   $('quality').value = settings.quality;
+  $('mode').value = settings.mode;
   const render = () => {
+    const rtc = settings.mode === 'webrtc';
     $('resolutionOut').textContent = '';
     $('fpsOut').textContent = `${settings.fps} fps`;
-    $('qualityOut').textContent = Math.round(settings.quality * 100) + '%';
+    $('qualityLabel').textContent = rtc ? '画質(ビットレート)' : 'JPEG画質';
+    $('qualityOut').textContent = rtc
+      ? (rtcBitrate() / 1e6).toFixed(1) + ' Mbps'
+      : Math.round(settings.quality * 100) + '%';
   };
   $('resolution').onchange = (e) => {
     settings.resolution = e.target.value;
     saveSettings();
     forceNext = true;
+    applyRtcEncodings();
   };
   $('fps').oninput = (e) => {
     settings.fps = Number(e.target.value);
     saveSettings();
     render();
     ticker.postMessage(stream ? 1000 / settings.fps : 0);
+    applyRtcEncodings();
   };
   $('quality').oninput = (e) => {
     settings.quality = Number(e.target.value);
     saveSettings();
     render();
     forceNext = true;
+    applyRtcEncodings();
+  };
+  $('mode').onchange = (e) => {
+    settings.mode = e.target.value;
+    saveSettings();
+    render();
+    socket.sendJson({ type: 'mode', mode: settings.mode });
+    syncPeers();
   };
   render();
 }
@@ -92,18 +114,25 @@ const socket = new MirrorSocket({
         sessionStorage.setItem('mirror-room', JSON.stringify(room));
         $('code').textContent = msg.code;
         showPublicUrl(msg.publicUrl);
+        socket.sendJson({ type: 'mode', mode: settings.mode });
         updateStatus();
         break;
       case 'public-url':
         showPublicUrl(msg.publicUrl);
         break;
       case 'viewers':
-        if (msg.count > viewers) forceNext = true;
+        if (msg.relayCount > relayViewers) forceNext = true;
         viewers = msg.count;
+        viewerIds = msg.ids || [];
+        relayViewers = msg.relayCount ?? msg.count;
         lastAckId = frameId; // 視聴者が変わったら流量制御をリセット
         $('sViewers').textContent = viewers;
         if (!viewers) $('sLatency').textContent = '-';
+        syncPeers();
         updateStatus();
+        break;
+      case 'signal':
+        handleSignal(msg.from, msg.data);
         break;
       case 'ack':
         if (msg.id > lastAckId) lastAckId = msg.id;
@@ -193,6 +222,7 @@ async function startCapture() {
   forceNext = true;
   lastAckId = frameId;
   ticker.postMessage(1000 / settings.fps);
+  syncPeers();
   $('toggle').textContent = '画面共有を停止';
   $('toggle').classList.add('stop');
   updateStatus();
@@ -204,6 +234,7 @@ function stopCapture() {
   frameSource = null;
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
+  syncPeers();
   $('preview').srcObject = null;
   $('toggle').textContent = '画面共有を開始';
   $('toggle').classList.remove('stop');
@@ -266,7 +297,7 @@ function createFrameSource(track, video) {
 }
 
 function tick() {
-  if (!frameSource || encoding || !socket.open || !viewers) return;
+  if (!frameSource || encoding || !socket.open || !relayViewers) return;
   const now = performance.now();
   const inFlight = frameId - lastAckId;
   if (inFlight >= maxInFlight()) {
@@ -311,15 +342,164 @@ async function encodeAndSend() {
   }
 }
 
+// ---------- WebRTC ----------
+
+// 画質スライダー(0.3〜0.95)をビットレートに対応させる: 約1.4〜8Mbps
+function rtcBitrate() {
+  return Math.round((0.2 + settings.quality * 8.2) * 1e6);
+}
+
+function rtcEncoding() {
+  const s = stream?.getVideoTracks()[0]?.getSettings() || {};
+  const [maxW, maxH] = settings.resolution.split('x').map(Number);
+  const scale = s.width && s.height ? Math.max(1, s.width / maxW, s.height / maxH) : 1;
+  return { maxBitrate: rtcBitrate(), maxFramerate: settings.fps, scaleResolutionDownBy: scale };
+}
+
+// 視聴者の一覧と送信方式に合わせて、WebRTC接続を作る・閉じる
+function syncPeers() {
+  const want = settings.mode === 'webrtc' && stream ? new Set(viewerIds) : new Set();
+  for (const [id, pc] of peers) {
+    if (!want.has(id)) {
+      pc.close();
+      peers.delete(id);
+    }
+  }
+  for (const id of want) if (!peers.has(id)) createPeer(id);
+  updateRtcStatus();
+}
+
+async function createPeer(id) {
+  if (typeof RTCPeerConnection !== 'function') return;
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+  peers.get(id)?.close();
+  peers.set(id, pc);
+  const track = stream.getVideoTracks()[0];
+  const tx = pc.addTransceiver(track, { direction: 'sendonly', streams: [stream], sendEncodings: [rtcEncoding()] });
+  preferH264(tx);
+  pc.onicecandidate = (e) => {
+    if (e.candidate) for (const c of expandCandidate(e.candidate)) signal(id, { candidate: c });
+  };
+  pc.onconnectionstatechange = () => {
+    updateRtcStatus();
+    if (pc.connectionState === 'connected') applyRtcEncodings();
+  };
+  try {
+    await pc.setLocalDescription(await pc.createOffer());
+    signal(id, { sdp: pc.localDescription });
+  } catch (err) {
+    console.warn('WebRTCの開始に失敗しました', err);
+  }
+}
+
+// Macなどでハードウェアエンコードが効きやすい H.264 を優先する(使えなければVP8などになる)
+function preferH264(tx) {
+  try {
+    const codecs = RTCRtpSender.getCapabilities('video')?.codecs;
+    if (!codecs || !tx.setCodecPreferences) return;
+    const h264 = codecs.filter((c) => c.mimeType === 'video/H264');
+    tx.setCodecPreferences([...h264, ...codecs.filter((c) => c.mimeType !== 'video/H264')]);
+  } catch {}
+}
+
+// Chromeはプライバシー保護のため自分のIPを "xxxx.local" に隠す。
+// 同じテザリング内で確実につながるよう、サーバーが知っているこのPCのLAN内IPに置き換えた候補も送る
+function expandCandidate(c) {
+  const json = c.toJSON();
+  const parts = json.candidate.split(' ');
+  if (!parts[4] || !parts[4].endsWith('.local')) return [json];
+  return [json, ...lanIps.map((ip) => ({ ...json, candidate: parts.map((p, i) => (i === 4 ? ip : p)).join(' ') }))];
+}
+
+function signal(to, data) {
+  socket.sendJson({ type: 'signal', to, data });
+}
+
+async function handleSignal(from, data) {
+  if (!data) return;
+  if (data.request === 'offer') {
+    // 視聴側がやり直しを求めてきた
+    if (settings.mode === 'webrtc' && stream && viewerIds.includes(from)) createPeer(from);
+    return;
+  }
+  const pc = peers.get(from);
+  if (!pc) return;
+  try {
+    if (data.sdp) await pc.setRemoteDescription(data.sdp);
+    else if (data.candidate) await pc.addIceCandidate(data.candidate);
+  } catch (err) {
+    console.warn('シグナリングの処理に失敗しました', err);
+  }
+}
+
+// 共有中の設定変更を反映する
+function applyRtcEncodings() {
+  for (const pc of peers.values()) {
+    const sender = pc.getSenders()[0];
+    if (!sender) continue;
+    const params = sender.getParameters();
+    if (!params.encodings?.length) continue;
+    Object.assign(params.encodings[0], rtcEncoding());
+    // 画面の文字を読みやすく保つため、回線が細いときは解像度ではなくfpsを落とす
+    params.degradationPreference = 'maintain-resolution';
+    sender.setParameters(params).catch(() => {});
+  }
+}
+
+function updateRtcStatus() {
+  if (settings.mode !== 'webrtc') {
+    $('sRtc').textContent = '-';
+    return;
+  }
+  const connected = [...peers.values()].filter((pc) => pc.connectionState === 'connected').length;
+  $('sRtc').textContent = peers.size ? `${connected} / ${peers.size}台` : '-';
+}
+
+// WebRTCの送信状況(最初に接続した視聴者の分)
+let lastRtcStats = null;
+async function readRtcStats() {
+  const pc = [...peers.values()].find((p) => p.connectionState === 'connected');
+  if (!pc) {
+    lastRtcStats = null;
+    return null;
+  }
+  const report = await pc.getStats();
+  let out = null;
+  report.forEach((r) => {
+    if (r.type === 'outbound-rtp' && r.kind === 'video') out = r;
+  });
+  if (!out) return null;
+  const prev = lastRtcStats;
+  lastRtcStats = { bytes: out.bytesSent, t: out.timestamp };
+  const codec = out.codecId && report.get(out.codecId)?.mimeType?.replace('video/', '');
+  return {
+    fps: Math.round(out.framesPerSecond || 0),
+    bitrate: prev ? ((out.bytesSent - prev.bytes) * 8) / ((out.timestamp - prev.t) / 1000) : 0,
+    res: out.frameWidth ? `${out.frameWidth}×${out.frameHeight}` : '-',
+    codec: codec || '',
+  };
+}
+
 // ---------- 画面表示 ----------
 
-setInterval(() => {
+setInterval(async () => {
+  if (settings.mode === 'webrtc' && peers.size && !relayViewers) {
+    const st = await readRtcStats().catch(() => null);
+    $('sFps').textContent = st ? st.fps : 0;
+    $('sRate').textContent = st ? (st.bitrate / 1e6).toFixed(1) + ' Mbps' : '-';
+    $('sSizeLabel').textContent = '方式';
+    $('sSize').textContent = st?.codec || '-';
+    $('sRes').textContent = st?.res || '-';
+    updateRtcStatus();
+    return;
+  }
   const frames = fpsMeter.count;
   const bytes = byteMeter.sum;
+  $('sSizeLabel').textContent = '1フレーム';
   $('sFps').textContent = frames;
   $('sRate').textContent = ((bytes * 8) / 1e6).toFixed(1) + ' Mbps';
   $('sSize').textContent = frames ? Math.round(bytes / frames / 1024) + ' KB' : '-';
-}, 500);
+}, 1000);
 
 $('toggle').onclick = () => (stream ? stopCapture() : startCapture());
 
@@ -329,5 +509,10 @@ fetch('/api/info')
   .then((r) => r.json())
   .then((info) => {
     if ($('publicUrl').textContent === '取得中…') showPublicUrl(info.publicUrl);
+    lanIps = (info.lanUrls || []).map((u) => new URL(u).hostname);
+    if (info.lanUrls?.length) {
+      $('lanUrl').textContent = info.lanUrls.join('  /  ');
+      $('lanUrlLabel').hidden = $('lanUrlRow').hidden = false;
+    }
   })
   .catch(() => {});
